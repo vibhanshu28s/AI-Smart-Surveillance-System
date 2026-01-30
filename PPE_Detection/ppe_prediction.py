@@ -50,7 +50,7 @@ class PPEPredictor:
 
         # 3. Logic: Alert if a person is present but missing gear
         # You can change 'and' to 'or' depending on if BOTH are required.
-        violation_detected = person_present and (not has_helmet or not has_vest)
+        violation_detected = person_present and (not has_helmet or not has_vest or not has_glove or not has_boots or not has_goggles or not has_none)
 
         # --- VISUAL ALERT ---
         if violation_detected:
