@@ -23,7 +23,7 @@ ppe = PPEPredictor()
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    index_path = os.path.join(BASE_DIR, "client", "index1.html")
+    index_path = os.path.join(BASE_DIR, "client", "index.html")
     return FileResponse(index_path)
 
 

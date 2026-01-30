@@ -36,37 +36,41 @@ class PPEPredictor:
                     found_labels.append(label)
 
         # --- SMART LOGIC ---
-        # 1. Check if a person is present
-        person_present = "Person" in found_labels
+        # We detect violations directly based on your "no_" labels
+        violations = []
+        if "no_helmet" in found_labels: violations.append("HELMET")
+        if "no_vest" in found_labels: violations.append("VEST")
+        if "no_gloves" in found_labels: violations.append("GLOVES")
+        if "no_boots" in found_labels: violations.append("BOOTS")
+        if "no_goggle" in found_labels: violations.append("GOGGLES")
+        if "none" in found_labels: violations.append("ALL PPE")
 
-        # 2. Define what "Safe" looks like (Modify these names based on your .onnx labels)
-        has_helmet = "no_helmet" in found_labels
-        has_vest = "no_vest" in found_labels
-        has_glove = "no_gloves" in found_labels
-        has_boots = "no_boots" in found_labels
-        has_goggles = "no_goggles" in found_labels
-        has_none = "none" in found_labels
-
-
-        # 3. Logic: Alert if a person is present but missing gear
-        # You can change 'and' to 'or' depending on if BOTH are required.
-        violation_detected = person_present and (not has_helmet or not has_vest or not has_glove or not has_boots or not has_goggles or not has_none)
+        # Trigger if any violation labels were found
+        violation_detected = len(violations) > 0
 
         # --- VISUAL ALERT ---
         if violation_detected:
-            # Draw Red Header
+            # Draw Red Header Bar
             overlay = annotated_frame.copy()
             cv2.rectangle(overlay, (0, 0), (frame.shape[1], 60), (0, 0, 255), -1)
             cv2.addWeighted(overlay, 0.6, annotated_frame, 0.4, 0, annotated_frame)
 
-            # Identify what is missing for the text
-            missing = []
-            if not has_helmet: missing.append("HELMET")
-            if not has_vest: missing.append("VEST")
-            alert_text = f"MISSING: {', '.join(missing)}" if person_present else "PPE VIOLATION"
+            # Create dynamic alert text based on detected "no_" labels
+            alert_text = f"VIOLATION: MISSING {', '.join(violations)}"
 
-            cv2.putText(annotated_frame, alert_text, (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 3)
+            # Scale text if it's too long
+            font_scale = 0.8 if len(alert_text) > 30 else 1.0
+
+            cv2.putText(
+                annotated_frame,
+                alert_text,
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA
+            )
 
         # --- AUDIO & SAVE LOGIC ---
         if violation_detected:
@@ -74,7 +78,9 @@ class PPEPredictor:
             if now - self.last_alert_time > self.COOLDOWN_SECONDS:
                 self.alert_sound.play()
                 ts = time.strftime("%Y%m%d-%H%M%S")
-                cv2.imwrite(f"{self.alert_dir}/violation_{ts}.jpg", annotated_frame)
+                path = os.path.join(self.alert_dir, f"violation_{ts}.jpg")
+                cv2.imwrite(path, annotated_frame)
+                print(f"[ALERT] PPE violation → {path}")
                 self.last_alert_time = now
 
         return annotated_frame, violation_detected
