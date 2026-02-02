@@ -1,85 +1,130 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>PPE Smart Surveillance</title>
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <style>
-    #alert-banner {
-      display: none;
-      background-color: #ff4444;
-      color: white;
-      padding: 20px;
-      text-align: center;
-      font-weight: bold;
-      font-size: 24px;
-      position: fixed;
-      top: 0;
-      width: 100%;
-      z-index: 1000;
-    }
-  </style>
+    <title>Crowd Management ROI Selector</title>
+    <style>
+        .video-container {
+            position: relative;
+            display: inline-block;
+        }
+        #video {
+            background-color: #000;
+            width: 800px; /* Display width */
+        }
+        #roi-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: crosshair;
+        }
+        .controls { margin-top: 10px; font-family: sans-serif; }
+    </style>
 </head>
 <body>
+    <div class="video-container">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="roi-canvas"></canvas>
+    </div>
 
-  <div id="alert-banner">⚠️ PPE VIOLATION DETECTED ⚠️</div>
+    <div class="controls">
+        <button onclick="startWebRTC()">Start Stream</button>
+        <button onclick="clearROI()">Clear ROI</button>
+        <p id="status">Status: Ready. Draw a box on the video to set the detection zone.</p>
+    </div>
 
-  <h2>Live PPE Feed</h2>
-  <video id="video" autoplay playsinline muted style="width: 100%; max-width: 800px; background: black;"></video>
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('roi-canvas');
+        const ctx = canvas.getContext('2d');
+        let pc = null;
 
-  <script>
-    // --- SOCKET.IO INTEGRATION ---
-    const socket = io();
-    const banner = document.getElementById('alert-banner');
-    const alertAudio = new Audio('/alert.mp3'); // Ensure this path matches your static routing
+        // ROI State
+        let startX, startY, isDrawing = false;
 
-    socket.on('ppe_violation_alert', (data) => {
-        console.warn("ALARM:", data.message);
-
-        // Show the red banner
-        banner.style.display = 'block';
-        banner.innerText = `⚠️ ${data.type.toUpperCase()} VIOLATION ⚠️`;
-
-        // Play the alert sound
-        alertAudio.play().catch(e => console.log("Audio play requires user interaction first."));
-
-        // Hide banner after 3 seconds
-        setTimeout(() => { banner.style.display = 'none'; }, 3000);
-    });
-
-    // --- EXISTING WEBRTC LOGIC ---
-    const pc = new RTCPeerConnection();
-    const videoElement = document.getElementById("video");
-
-    pc.addTransceiver("video", { direction: "recvonly" });
-
-    pc.ontrack = (event) => {
-        if (event.streams && event.streams[0]) {
-            videoElement.srcObject = event.streams[0];
-        } else {
-            videoElement.srcObject = new MediaStream([event.track]);
-        }
-        videoElement.play().catch(e => console.error("Autoplay blocked:", e));
-    };
-
-    async function start() {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        const response = await fetch("/offer", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                sdp: pc.localDescription.sdp,
-                type: pc.localDescription.type
-            })
+        // 1. Initialize Canvas Size to Match Video CSS size
+        video.addEventListener('loadedmetadata', () => {
+            canvas.width = video.clientWidth;
+            canvas.height = video.clientHeight;
         });
 
-        const answer = await response.json();
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-    }
+        // 2. Mouse Events for Drawing
+        canvas.onmousedown = (e) => {
+            startX = e.offsetX;
+            startY = e.offsetY;
+            isDrawing = true;
+        };
 
-    start();
-  </script>
+        canvas.onmousemove = (e) => {
+            if (!isDrawing) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = "#00ffff";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(startX, startY, e.offsetX - startX, e.offsetY - startY);
+        };
+
+        canvas.onmouseup = (e) => {
+            isDrawing = false;
+            sendROI(startX, startY, e.offsetX, e.offsetY);
+        };
+
+        // 3. Coordinate Scaling and API Communication
+        async function sendROI(x1, y1, x2, y2) {
+            // Scale CSS coordinates to actual Video Frame resolution
+            const scaleX = video.videoWidth / video.clientWidth;
+            const scaleY = video.videoHeight / video.clientHeight;
+
+            const roiData = {
+                x1: Math.min(x1, x2) * scaleX,
+                y1: Math.min(y1, y2) * scaleY,
+                x2: Math.max(x1, x2) * scaleX,
+                y2: Math.max(y1, y2) * scaleY
+            };
+
+            document.getElementById('status').innerText = "Status: Sending ROI...";
+
+            // Send to the /set_roi endpoint
+            await fetch('/set_roi', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(roiData)
+            });
+
+            document.getElementById('status').innerText = "Status: ROI Updated on Server.";
+        }
+
+        function clearROI() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Reset server-side ROI by sending full-frame dimensions
+            sendROI(0, 0, video.clientWidth, video.clientHeight);
+        }
+
+        // 4. WebRTC Connection Logic (as established in previous setup)
+        async function startWebRTC() {
+            pc = new RTCPeerConnection();
+
+            // Add media receiver
+            pc.addTransceiver('video', {direction: 'recvonly'});
+
+            pc.ontrack = (event) => {
+                video.srcObject = event.streams[0];
+            };
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            // Send offer to FastAPI /offer endpoint
+            const response = await fetch('/offer', {
+                body: JSON.stringify({
+                    sdp: pc.localDescription.sdp,
+                    type: pc.localDescription.type,
+                }),
+                headers: { 'Content-Type': 'application/json' },
+                method: 'POST'
+            });
+
+            const answer = await response.json();
+            await pc.setRemoteDescription(answer);
+        }
+    </script>
 </body>
 </html>

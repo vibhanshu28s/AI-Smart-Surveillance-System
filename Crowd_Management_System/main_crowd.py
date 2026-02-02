@@ -20,6 +20,15 @@ pcs = set()
 camera = CameraSource(rtsp_url=None)
 crowd_manager = CrowdManager()
 
+@app.post("/set_roi")
+async def set_roi(data: dict = Body(...)):
+    """
+    Expects JSON: {"x1": 100, "y1": 100, "x2": 400, "y2": 400}
+    Values should be scaled to the video frame size.
+    """
+    crowd_manager.update_roi(data)
+    return {"status": "ROI Updated", "roi": data}
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     # Serve the crowd monitoring dashboard
