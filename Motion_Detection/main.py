@@ -1,72 +1,67 @@
 import os
 import asyncio
-from fastapi import FastAPI, Request, Body
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+import socketio
+from fastapi import FastAPI, Body
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from aiortc import RTCPeerConnection, RTCSessionDescription
 
-# Importing your existing custom modules
-from common.camera_source import CameraSource
-from PPE_Detection.ppe_prediction import PPEPredictor
-from webrtc.video_track import PPEVideoTrack
+from common.motion_camera_source import CameraSource
+from motion_detection import MotionPredictor
+from webrtc.motion_track import MotionVideoTrack
+
+# 1. Define and Create Required Directories immediately
+# This prevents the RuntimeError seen in your logs
+ALERT_DIR = "motion_alert"
+if not os.path.exists(ALERT_DIR):
+    os.makedirs(ALERT_DIR)
+
+sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+sio_app = socketio.ASGIApp(sio)
 
 app = FastAPI()
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Global store for PeerConnections
+app.mount("/socket.io", sio_app)
+# Update mounting to use the correct 'motion_alert' folder
+app.mount("/clips", StaticFiles(directory=ALERT_DIR), name="clips")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 pcs = set()
 
-# Initialize your Camera and PPE model globally (or via app state)
-camera = CameraSource("rtsp://username:password@192.168.1.64/stream")
-ppe = PPEPredictor()
-
+camera = CameraSource(rtsp_url="rtsp://username:password@192.168.1.64/stream")
+motion_engine = MotionPredictor()
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
     index_path = os.path.join(BASE_DIR, "client", "index.html")
     return FileResponse(index_path)
 
-
 @app.post("/offer")
 async def offer(params: dict = Body(...)):
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-
     pc = RTCPeerConnection()
     pcs.add(pc)
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        print(f"WebRTC state: {pc.connectionState}")
         if pc.connectionState in ["failed", "closed"]:
             await pc.close()
             pcs.discard(pc)
 
-    # Adding the PPE processed track to the connection
-    pc.addTrack(
-        PPEVideoTrack(camera, ppe)
-    )
-
-    # Handle the WebRTC Handshake
+    pc.addTrack(MotionVideoTrack(camera, motion_engine, sio=sio))
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
-    return {
-        "sdp": pc.localDescription.sdp,
-        "type": pc.localDescription.type
-    }
-
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    # Close all active WebRTC connections
     coros = [pc.close() for pc in pcs]
     await asyncio.gather(*coros)
     pcs.clear()
-
+    camera.release()
 
 if __name__ == "__main__":
     import uvicorn
-
-    # Note: Using port 8000 as requested for FastAPI convention
     uvicorn.run(app, host="0.0.0.0", port=8000)
